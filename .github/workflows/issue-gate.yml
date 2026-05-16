@@ -20,8 +20,9 @@ jobs:
             const role = issue.author_association;
 
             const allowed = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+            const whitelistedBots = ['clanker-journalist[bot]'];
 
-            if (allowed.includes(role)) {
+            if (allowed.includes(role) || whitelistedBots.includes(author)) {
               console.log(`✅ ${author} (${role}) — issue #${issue.number} allowed`);
               return;
             }
