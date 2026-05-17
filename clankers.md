@@ -25,3 +25,4 @@ Automated tracking of all Clankers PR contributors.
 | suoyinjv | 1 | 2026-05-17T12:08:49.287Z | 2026-05-17T12:08:49.287Z |
 | boyblaxus | 1 | 2026-05-17T12:11:45.037Z | 2026-05-17T12:11:45.037Z |
 | BossChaos | 1 | 2026-05-17T12:40:31.251Z | 2026-05-17T12:40:31.251Z |
+| oxravenz | 1 | 2026-05-17T15:15:11.116Z | 2026-05-17T15:15:11.116Z |
