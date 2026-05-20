@@ -132,6 +132,12 @@
     "last_pr": "2026-05-17T07:58:37.743Z"
   },
   {
+    "username": "Sikkra",
+    "total_prs": 2,
+    "first_pr": "2026-05-20T00:23:42.720Z",
+    "last_pr": "2026-05-20T00:27:14.311Z"
+  },
+  {
     "username": "CuboYe",
     "total_prs": 1,
     "first_pr": "2026-05-16T16:52:10.623Z",
@@ -208,11 +214,5 @@
     "total_prs": 1,
     "first_pr": "2026-05-19T20:57:07.348Z",
     "last_pr": "2026-05-19T20:57:07.348Z"
-  },
-  {
-    "username": "Sikkra",
-    "total_prs": 1,
-    "first_pr": "2026-05-20T00:23:42.720Z",
-    "last_pr": "2026-05-20T00:23:42.720Z"
   }
 ]
