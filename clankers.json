@@ -162,6 +162,12 @@
     "last_pr": "2026-05-17T07:58:37.743Z"
   },
   {
+    "username": "b3ar-sudo",
+    "total_prs": 2,
+    "first_pr": "2026-05-20T08:40:38.127Z",
+    "last_pr": "2026-05-20T08:48:17.782Z"
+  },
+  {
     "username": "CuboYe",
     "total_prs": 1,
     "first_pr": "2026-05-16T16:52:10.623Z",
@@ -232,11 +238,5 @@
     "total_prs": 1,
     "first_pr": "2026-05-20T04:48:51.211Z",
     "last_pr": "2026-05-20T04:48:51.211Z"
-  },
-  {
-    "username": "b3ar-sudo",
-    "total_prs": 1,
-    "first_pr": "2026-05-20T08:40:38.127Z",
-    "last_pr": "2026-05-20T08:40:38.127Z"
   }
 ]
