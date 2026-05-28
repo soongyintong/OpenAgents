@@ -234,6 +234,12 @@
     "last_pr": "2026-05-27T10:32:04.422Z"
   },
   {
+    "username": "liyanzong",
+    "total_prs": 2,
+    "first_pr": "2026-05-28T10:45:54.231Z",
+    "last_pr": "2026-05-28T10:52:47.747Z"
+  },
+  {
     "username": "CuboYe",
     "total_prs": 1,
     "first_pr": "2026-05-16T16:52:10.623Z",
@@ -352,11 +358,5 @@
     "total_prs": 1,
     "first_pr": "2026-05-28T05:54:28.787Z",
     "last_pr": "2026-05-28T05:54:28.787Z"
-  },
-  {
-    "username": "liyanzong",
-    "total_prs": 1,
-    "first_pr": "2026-05-28T10:45:54.231Z",
-    "last_pr": "2026-05-28T10:45:54.231Z"
   }
 ]
