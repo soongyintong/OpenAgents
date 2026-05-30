@@ -210,6 +210,12 @@
     "last_pr": "2026-05-30T20:11:17.990Z"
   },
   {
+    "username": "barnacleagent-svg",
+    "total_prs": 4,
+    "first_pr": "2026-05-30T21:05:09.558Z",
+    "last_pr": "2026-05-30T23:18:36.622Z"
+  },
+  {
     "username": "hamademon168-bot",
     "total_prs": 3,
     "first_pr": "2026-05-16T16:53:26.893Z",
@@ -268,12 +274,6 @@
     "total_prs": 3,
     "first_pr": "2026-05-28T21:06:11.576Z",
     "last_pr": "2026-05-29T03:03:07.523Z"
-  },
-  {
-    "username": "barnacleagent-svg",
-    "total_prs": 3,
-    "first_pr": "2026-05-30T21:05:09.558Z",
-    "last_pr": "2026-05-30T23:18:02.435Z"
   },
   {
     "username": "OlegChep",
