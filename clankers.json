@@ -306,6 +306,12 @@
     "last_pr": "2026-05-30T23:50:02.782Z"
   },
   {
+    "username": "Klepsiphron",
+    "total_prs": 2,
+    "first_pr": "2026-05-30T23:46:56.687Z",
+    "last_pr": "2026-05-31T00:12:57.878Z"
+  },
+  {
     "username": "CuboYe",
     "total_prs": 1,
     "first_pr": "2026-05-16T16:52:10.623Z",
@@ -442,11 +448,5 @@
     "total_prs": 1,
     "first_pr": "2026-05-28T17:56:26.471Z",
     "last_pr": "2026-05-28T17:56:26.471Z"
-  },
-  {
-    "username": "Klepsiphron",
-    "total_prs": 1,
-    "first_pr": "2026-05-30T23:46:56.687Z",
-    "last_pr": "2026-05-30T23:46:56.687Z"
   }
 ]
