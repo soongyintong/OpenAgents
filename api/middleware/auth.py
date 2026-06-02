@@ -1,21 +1,20 @@
-"""JWT + API Key authentication middleware for the OpenAgents API."""
+"""JWT and API key authentication middleware for the OpenAgents API."""
 
 import hashlib
 import hmac
-import jwt
 import os
 import secrets
-from fastapi import Request, HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from datetime import datetime, timedelta
 from typing import Optional
 
+import jwt
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
-from ..models.database import get_db, ApiKey, User
 
-# BUG: No fallback — if JWT_SECRET is not set, os.environ[] raises KeyError
-# crashing the entire application on startup
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-in-production")
+from ..models.database import ApiKey, User, get_db
+
+JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 REFRESH_TOKEN_EXPIRE_DAYS = 30
@@ -39,8 +38,6 @@ def create_refresh_token(data: dict) -> str:
 
 def decode_token(token: str) -> dict:
     try:
-        # BUG: Algorithm not pinned in decode — attacker can forge a token with
-        # alg: "none" and bypass signature verification entirely
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
@@ -49,41 +46,35 @@ def decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-def hash_api_key(key: str) -> str:
-    """Return SHA-256 hex digest of the API key."""
-    return hashlib.sha256(key.encode()).hexdigest()
-
-
 def generate_api_key() -> str:
-    """Generate a cryptographically secure random API key."""
     return "oa_" + secrets.token_urlsafe(32)
 
 
-async def get_api_key_user(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> Optional[dict]:
-    """Validate X-API-Key header and return user data if valid."""
+def hash_api_key(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+async def get_api_key_user(request: Request, db: Session = Depends(get_db)) -> Optional[dict]:
     api_key = request.headers.get("X-API-Key")
     if not api_key:
         return None
 
-    key_hash = hash_api_key(api_key)
-    key_record = db.query(ApiKey).filter(
-        ApiKey.key_hash == key_hash,
-        ApiKey.is_active == 1,
-    ).first()
+    api_key_hash = hash_api_key(api_key)
+    active_keys = db.query(ApiKey).filter(ApiKey.is_active == 1).all()
+    key_record = next(
+        (record for record in active_keys if hmac.compare_digest(record.key_hash, api_key_hash)),
+        None,
+    )
 
-    if not key_record:
+    if key_record is None:
         raise HTTPException(status_code=401, detail="Invalid or revoked API key")
 
-    # Update last_used_at
+    user = db.query(User).filter(User.id == key_record.user_id).first()
+    if user is None:
+        raise HTTPException(status_code=401, detail="API key owner not found")
+
     key_record.last_used_at = datetime.utcnow()
     db.commit()
-
-    user = db.query(User).filter(User.id == key_record.user_id).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="API key owner not found")
 
     return {
         "id": user.id,
@@ -91,7 +82,6 @@ async def get_api_key_user(
         "roles": [],
         "auth_method": "api_key",
         "api_key_id": key_record.id,
-        "api_key_name": key_record.name,
     }
 
 
@@ -99,40 +89,27 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     api_key_user: Optional[dict] = Depends(get_api_key_user),
 ) -> dict:
-    """Get the current authenticated user, checking JWT first, then API key."""
-
-    # If API key authentication succeeded, return that
     if api_key_user is not None:
         return api_key_user
 
-    # Fall back to JWT
     if credentials is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required. Provide either a Bearer JWT token or an X-API-Key header.",
-        )
+        raise HTTPException(status_code=401, detail="Authentication required")
 
-    token = credentials.credentials
-    payload = decode_token(token)
+    payload = decode_token(credentials.credentials)
 
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
 
-    # BUG: No token revocation check — logged-out or compromised tokens
-    # remain valid until they naturally expire
-    try:
-        user_id = int(payload.get("sub"))
-    except (TypeError, ValueError):
+    user_id = payload.get("sub")
+    if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    user_data = {
+    return {
         "id": user_id,
         "address": payload.get("address"),
         "roles": payload.get("roles", []),
         "auth_method": "jwt",
     }
-
-    return user_data
 
 
 def require_role(role: str):
