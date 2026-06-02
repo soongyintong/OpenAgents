@@ -1,15 +1,10 @@
-from fastapi import FastAPI, HTTPException, Query, Depends
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Query
+
+from .models.database import init_db
+from .routes.auth import router as auth_router
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
-
-from .routes.auth import router as auth_router
-from .routes.agents import router as agents_router
-from .routes.tasks import router as tasks_router
-from .routes.payments import router as payments_router
-from .middleware.ratelimit import RateLimitMiddleware, RateLimitConfig
-from .models.database import init_db, get_db
 
 app = FastAPI(
     title="OpenAgents API",
@@ -17,32 +12,8 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Initialize database tables
 init_db()
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Add rate limiter with different limits for API key vs JWT
-rate_config = RateLimitConfig(
-    requests_per_window=100,       # JWT: 100 req/min
-    window_seconds=60,
-    api_key_requests_per_window=1000,  # API key: 1000 req/min
-    api_key_window_seconds=60,
-)
-app.add_middleware(RateLimitMiddleware, config=rate_config)
-
-# Include routers
 app.include_router(auth_router)
-app.include_router(agents_router)
-app.include_router(tasks_router)
-app.include_router(payments_router)
 
 
 class AgentResponse(BaseModel):
