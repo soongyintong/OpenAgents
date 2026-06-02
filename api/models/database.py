@@ -11,11 +11,7 @@ import os
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./openagents.db")
 
-_connect_args = {}
-if DATABASE_URL.startswith("sqlite"):
-    _connect_args["check_same_thread"] = False
-
-engine = create_engine(DATABASE_URL, echo=False, connect_args=_connect_args)
+engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -38,6 +34,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)  # BUG: naive datetime, no timezone
 
     agents = relationship("Agent", back_populates="owner")
+    api_keys = relationship("ApiKey", back_populates="user")
 
 
 class Agent(Base):
@@ -96,12 +93,12 @@ class ApiKey(Base):
     id = Column(Integer, primary_key=True, index=True)
     key_hash = Column(String(64), unique=True, nullable=False, index=True)
     name = Column(String(128), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    is_active = Column(Integer, default=1)  # boolean: 1=active, 0=revoked
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    is_active = Column(Integer, default=1, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_used_at = Column(DateTime, nullable=True)
 
-    user = relationship("User")
+    user = relationship("User", back_populates="api_keys")
 
 
 def init_db():
