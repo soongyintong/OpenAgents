@@ -1,31 +1,22 @@
-"""Authentication endpoints for API key management."""
+"""API key management endpoints."""
+
+from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime
 from sqlalchemy.orm import Session
 
-from ..models.database import get_db, ApiKey, User
-from ..middleware.auth import (
-    get_current_user,
-    generate_api_key,
-    hash_api_key,
-    generate_login_tokens,
-)
+from ..middleware.auth import generate_api_key, get_current_user, hash_api_key
+from ..models.database import ApiKey, get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-class LoginRequest(BaseModel):
-    address: str
-    signature: Optional[str] = None
 
 
 class ApiKeyCreateResponse(BaseModel):
     id: int
     name: str
-    api_key: str  # Plaintext key shown once
+    api_key: str
     created_at: datetime
 
 
@@ -43,27 +34,42 @@ async def create_api_key(
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Generate a new API key. The returned plaintext key is shown only once."""
     plaintext_key = generate_api_key()
-    key_hash = hash_api_key(plaintext_key)
-
-    api_key_record = ApiKey(
-        key_hash=key_hash,
+    api_key = ApiKey(
+        key_hash=hash_api_key(plaintext_key),
         name=name,
         user_id=user["id"],
         is_active=1,
         created_at=datetime.utcnow(),
     )
-    db.add(api_key_record)
+    db.add(api_key)
     db.commit()
-    db.refresh(api_key_record)
+    db.refresh(api_key)
 
     return ApiKeyCreateResponse(
-        id=api_key_record.id,
-        name=api_key_record.name,
+        id=api_key.id,
+        name=api_key.name,
         api_key=plaintext_key,
-        created_at=api_key_record.created_at,
+        created_at=api_key.created_at,
     )
+
+
+@router.get("/api-keys", response_model=list[ApiKeyInfo])
+async def list_api_keys(
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    keys = db.query(ApiKey).filter(ApiKey.user_id == user["id"]).all()
+    return [
+        ApiKeyInfo(
+            id=key.id,
+            name=key.name,
+            is_active=bool(key.is_active),
+            created_at=key.created_at,
+            last_used_at=key.last_used_at,
+        )
+        for key in keys
+    ]
 
 
 @router.delete("/api-keys/{key_id}")
@@ -72,56 +78,12 @@ async def revoke_api_key(
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Revoke an API key by its ID."""
-    key_record = db.query(ApiKey).filter(ApiKey.id == key_id).first()
-    if not key_record:
+    api_key = db.query(ApiKey).filter(ApiKey.id == key_id).first()
+    if api_key is None:
         raise HTTPException(status_code=404, detail="API key not found")
-    if key_record.user_id != user["id"]:
+    if str(api_key.user_id) != str(user["id"]):
         raise HTTPException(status_code=403, detail="Not the owner of this API key")
 
-    key_record.is_active = 0
+    api_key.is_active = 0
     db.commit()
     return {"detail": "API key revoked", "id": key_id}
-
-
-@router.get("/api-keys", response_model=list[ApiKeyInfo])
-async def list_api_keys(
-    user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """List all API keys for the authenticated user."""
-    keys = db.query(ApiKey).filter(ApiKey.user_id == user["id"]).all()
-    return [
-        ApiKeyInfo(
-            id=k.id,
-            name=k.name,
-            is_active=bool(k.is_active),
-            created_at=k.created_at,
-            last_used_at=k.last_used_at,
-        )
-        for k in keys
-    ]
-
-
-@router.post("/login")
-async def login(
-    login_req: LoginRequest,
-    db: Session = Depends(get_db),
-):
-    """Login or register with a wallet address.
-
-    In production this would verify a signed message. For development,
-    any valid address is accepted.
-    """
-    user = db.query(User).filter(User.address == login_req.address).first()
-    if not user:
-        user = User(
-            address=login_req.address,
-            created_at=datetime.utcnow(),
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-    tokens = generate_login_tokens(str(user.id), user.address)
-    return tokens
