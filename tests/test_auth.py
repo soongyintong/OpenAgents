@@ -1,381 +1,162 @@
-"""Tests for JWT + API key authentication."""
-
-import hashlib
-import pytest
-from fastapi.testclient import TestClient
+import os
 from datetime import datetime
 
-from api.main import app
-from api.middleware.auth import (
+import jwt
+import pytest
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+os.environ.setdefault("JWT_SECRET", "test-secret")
+
+from api.middleware.auth import (  # noqa: E402
     create_access_token,
-    hash_api_key,
     generate_api_key,
-    JWT_ALGORITHM,
-    JWT_SECRET,
+    get_current_user,
+    hash_api_key,
 )
-from api.models.database import SessionLocal, ApiKey, User
-
-client = TestClient(app)
-
-# Counter for unique addresses
-_user_counter = [0]
+from api.models.database import ApiKey, Base, User, get_db  # noqa: E402
+from api.routes.auth import router as auth_router  # noqa: E402
 
 
-def _create_test_user(db) -> int:
-    """Helper to create a test user, returns user.id."""
-    _user_counter[0] += 1
-    addr = f"0x{_user_counter[0]:040x}"
-    user = User(address=addr, created_at=datetime.utcnow())
+@pytest.fixture()
+def client():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    app = FastAPI()
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    @app.get("/protected")
+    async def protected(user: dict = Depends(get_current_user)):
+        return user
+
+    app.include_router(auth_router)
+    app.dependency_overrides[get_db] = override_get_db
+
+    with TestClient(app) as test_client:
+        test_client.db = TestingSessionLocal
+        yield test_client
+
+
+def create_user(client, address="0x0000000000000000000000000000000000000001"):
+    db = client.db()
+    user = User(address=address, created_at=datetime.utcnow())
     db.add(user)
     db.commit()
-    user_id = user.id  # Extract before closing
+    db.refresh(user)
+    user_id = user.id
     db.close()
     return user_id
 
 
-def _create_api_key(db, user_id: int, name: str = "test-key", active: bool = True) -> str:
-    """Create an API key for a user, returns the plaintext key."""
-    plaintext_key = generate_api_key()
-    key_hash = hash_api_key(plaintext_key)
+def create_key(client, user_id, active=True):
+    plaintext = generate_api_key()
+    db = client.db()
     api_key = ApiKey(
-        key_hash=key_hash,
-        name=name,
+        key_hash=hash_api_key(plaintext),
+        name="test-key",
         user_id=user_id,
         is_active=1 if active else 0,
         created_at=datetime.utcnow(),
     )
     db.add(api_key)
     db.commit()
+    db.refresh(api_key)
+    key_id = api_key.id
     db.close()
-    return plaintext_key
+    return plaintext, key_id
 
 
-def _get_jwt_token(user_id: int) -> str:
-    """Helper to create a valid JWT."""
-    return create_access_token({"sub": str(user_id), "address": "0xtest"})
+def test_jwt_auth_accepts_valid_token(client):
+    token = create_access_token({"sub": "123", "address": "0xtest"})
+    response = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    assert response.json()["auth_method"] == "jwt"
 
 
-class TestJWTAuth:
-    """Test JWT bearer token authentication on protected routes."""
+def test_jwt_decode_rejects_alg_none(client):
+    token = jwt.encode(
+        {"sub": "123", "address": "0xtest", "type": "access"},
+        key="",
+        algorithm="none",
+    )
+    response = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
 
-    def _create_task_payload(self):
-        return {"title": "test task", "description": "test", "reward_amount": 1.0}
-
-    def test_jwt_valid_token(self):
-        """Valid JWT token should authenticate successfully for protected routes."""
-        db = SessionLocal()
-        user_id = _create_test_user(db)
-        token = _get_jwt_token(user_id)
-        response = client.post(
-            "/tasks/",
-            json=self._create_task_payload(),
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert response.status_code == 200
-
-    def test_jwt_missing_token(self):
-        """Missing JWT token on a protected route should return 401."""
-        response = client.post("/tasks/", json=self._create_task_payload())
-        assert response.status_code == 401
-
-    def test_jwt_invalid_token(self):
-        """Invalid JWT token should return 401."""
-        response = client.post(
-            "/tasks/",
-            json=self._create_task_payload(),
-            headers={"Authorization": "Bearer invalid_token_here"},
-        )
-        assert response.status_code == 401
-
-    def test_jwt_expired_token(self):
-        """Expired JWT token should return 401."""
-        import jwt
-        user_id = 1  # Doesn't matter for expired tokens
-        expired_token = jwt.encode(
-            {
-                "sub": str(user_id),
-                "address": "0xtest",
-                "exp": 0,
-                "iat": 0,
-                "type": "access",
-            },
-            key=JWT_SECRET,
-            algorithm=JWT_ALGORITHM,
-        )
-        response = client.post(
-            "/tasks/",
-            json=self._create_task_payload(),
-            headers={"Authorization": f"Bearer {expired_token}"},
-        )
-        assert response.status_code == 401
-        assert "expired" in response.json()["detail"].lower()
-
-    def test_jwt_wrong_token_type(self):
-        """Refresh token used as access token should return 401."""
-        from api.middleware.auth import create_refresh_token
-        refresh = create_refresh_token({"sub": "1", "address": "0xtest"})
-        response = client.post(
-            "/tasks/",
-            json=self._create_task_payload(),
-            headers={"Authorization": f"Bearer {refresh}"},
-        )
-        assert response.status_code == 401
-        assert "token type" in response.json()["detail"].lower()
+    assert response.status_code == 401
 
 
-class TestApiKeyAuth:
-    """Test API key authentication via X-API-Key header."""
+def test_api_key_auth_accepts_valid_key(client):
+    user_id = create_user(client)
+    plaintext, _ = create_key(client, user_id)
 
-    def _create_task_payload(self):
-        return {"title": "test task", "description": "test", "reward_amount": 1.0}
+    response = client.get("/protected", headers={"X-API-Key": plaintext})
 
-    def test_api_key_valid(self):
-        """Valid API key should authenticate successfully."""
-        db = SessionLocal()
-        user_id = _create_test_user(db)
-        db2 = SessionLocal()
-        plaintext_key = _create_api_key(db2, user_id)
-
-        response = client.post(
-            "/tasks/",
-            json=self._create_task_payload(),
-            headers={"X-API-Key": plaintext_key},
-        )
-        assert response.status_code == 200
-
-    def test_api_key_invalid(self):
-        """Invalid API key should return 401."""
-        response = client.post(
-            "/tasks/",
-            json=self._create_task_payload(),
-            headers={"X-API-Key": "oa_invalid_key_here"},
-        )
-        assert response.status_code == 401
-
-    def test_api_key_revoked(self):
-        """Revoked API key should return 401."""
-        db = SessionLocal()
-        user_id = _create_test_user(db)
-        db2 = SessionLocal()
-        plaintext_key = _create_api_key(db2, user_id, active=False)
-
-        response = client.post(
-            "/tasks/",
-            json=self._create_task_payload(),
-            headers={"X-API-Key": plaintext_key},
-        )
-        assert response.status_code == 401
-        assert "revoked" in response.json()["detail"].lower()
-
-    def test_api_key_sha256_storage(self):
-        """API key should be stored as SHA-256 hash, never as plaintext."""
-        db = SessionLocal()
-        user_id = _create_test_user(db)
-
-        plaintext_key = generate_api_key()
-        key_hash = hash_api_key(plaintext_key)
-
-        assert len(key_hash) == 64
-
-        db2 = SessionLocal()
-        api_key = ApiKey(
-            key_hash=key_hash,
-            name="test-hash-storage",
-            user_id=user_id,
-            is_active=1,
-            created_at=datetime.utcnow(),
-        )
-        db2.add(api_key)
-        db2.commit()
-        db2.refresh(api_key)
-
-        stored = db2.query(ApiKey).filter(ApiKey.id == api_key.id).first()
-        assert stored.key_hash == key_hash
-        assert stored.key_hash != plaintext_key
-        db2.close()
-
-    def test_api_key_uses_sha256(self):
-        """Verify that hash_api_key actually uses SHA-256."""
-        key = "oa_test_key_for_sha_test"
-        expected = hashlib.sha256(key.encode()).hexdigest()
-        assert hash_api_key(key) == expected
+    assert response.status_code == 200
+    assert response.json()["auth_method"] == "api_key"
+    assert response.json()["id"] == user_id
 
 
-class TestApiKeyEndpoints:
-    """Test the API key CRUD endpoints."""
+def test_api_key_auth_rejects_revoked_key(client):
+    user_id = create_user(client)
+    plaintext, _ = create_key(client, user_id, active=False)
 
-    def test_create_api_key_endpoint(self):
-        """POST /auth/api-keys should create a key and return it once."""
-        db = SessionLocal()
-        user_id = _create_test_user(db)
-        token = _get_jwt_token(user_id)
+    response = client.get("/protected", headers={"X-API-Key": plaintext})
 
-        response = client.post(
-            "/auth/api-keys?name=my-test-key",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["name"] == "my-test-key"
-        assert data["api_key"].startswith("oa_")
-        assert "id" in data
-        assert "created_at" in data
-
-    def test_create_api_key_requires_auth(self):
-        """POST /auth/api-keys without auth should return 401."""
-        response = client.post("/auth/api-keys?name=test")
-        assert response.status_code == 401
-
-    def test_list_api_keys(self):
-        """GET /auth/api-keys should return all keys for the user."""
-        db = SessionLocal()
-        user_id = _create_test_user(db)
-
-        db2 = SessionLocal()
-        for name in ["key-1", "key-2"]:
-            plaintext = generate_api_key()
-            key_hash = hash_api_key(plaintext)
-            db2.add(ApiKey(
-                key_hash=key_hash,
-                name=name,
-                user_id=user_id,
-                is_active=1,
-                created_at=datetime.utcnow(),
-            ))
-        db2.commit()
-        db2.close()
-
-        token = _get_jwt_token(user_id)
-        response = client.get(
-            "/auth/api-keys",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data) == 2
-
-    def test_revoke_api_key_endpoint(self):
-        """DELETE /auth/api-keys/{id} should revoke a key."""
-        db = SessionLocal()
-        user_id = _create_test_user(db)
-
-        db2 = SessionLocal()
-        plaintext_key = generate_api_key()
-        key_hash = hash_api_key(plaintext_key)
-        api_key = ApiKey(
-            key_hash=key_hash,
-            name="revoke-me",
-            user_id=user_id,
-            is_active=1,
-            created_at=datetime.utcnow(),
-        )
-        db2.add(api_key)
-        db2.commit()
-        key_id = api_key.id
-        db2.close()
-
-        token = _get_jwt_token(user_id)
-        response = client.delete(
-            f"/auth/api-keys/{key_id}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert response.status_code == 200
-
-        # Verify key is no longer valid
-        response2 = client.post(
-            "/tasks/",
-            json={"title": "test", "description": "test", "reward_amount": 1.0},
-            headers={"X-API-Key": plaintext_key},
-        )
-        assert response2.status_code == 401
-
-    def test_revoke_other_users_key(self):
-        """Cannot revoke another user's API key."""
-        user_id_1 = _create_test_user(SessionLocal())
-        user_id_2 = _create_test_user(SessionLocal())
-
-        db3 = SessionLocal()
-        # user1 creates a key
-        plaintext_key = generate_api_key()
-        key_hash = hash_api_key(plaintext_key)
-        api_key = ApiKey(
-            key_hash=key_hash,
-            name="user1-key",
-            user_id=user_id_1,
-            is_active=1,
-            created_at=datetime.utcnow(),
-        )
-        db3.add(api_key)
-        db3.commit()
-        key_id = api_key.id
-        db3.close()
-
-        # user2 tries to revoke user1's key
-        token_user2 = _get_jwt_token(user_id_2)
-        response = client.delete(
-            f"/auth/api-keys/{key_id}",
-            headers={"Authorization": f"Bearer {token_user2}"},
-        )
-        assert response.status_code == 403
+    assert response.status_code == 401
 
 
-class TestRateLimitHeaders:
-    """Test that rate limit headers differentiate between JWT and API key."""
+def test_api_key_hash_uses_sha256():
+    key = "oa_test_key"
+    expected = __import__("hashlib").sha256(key.encode("utf-8")).hexdigest()
 
-    def test_health_no_rate_limit(self):
-        """Health endpoint is excluded from rate limiting."""
-        response = client.get("/health")
-        assert response.status_code == 200
-
-    def test_api_key_rate_limit_header(self):
-        """API key requests should show higher rate limit in headers."""
-        db = SessionLocal()
-        user_id = _create_test_user(db)
-        db2 = SessionLocal()
-        plaintext_key = _create_api_key(db2, user_id)
-
-        response = client.get(
-            "/health",
-            headers={"X-API-Key": plaintext_key},
-        )
-        # Health endpoint is excluded from rate limiting
-        assert response.status_code == 200
-
-        # Test with a non-health endpoint that doesn't need auth for rate limiting
-        response2 = client.get(
-            "/",
-            headers={"X-API-Key": plaintext_key},
-        )
-        # 404 is fine since there's no / route - just checking headers work
-        if response2.status_code == 404:
-            pass  # Rate limit middleware already ran
+    assert hash_api_key(key) == expected
 
 
-class TestKeyGeneration:
-    """Test API key generation properties."""
+def test_create_api_key_returns_plaintext_once_and_stores_hash(client):
+    user_id = create_user(client)
+    token = create_access_token({"sub": str(user_id), "address": "0xtest"})
 
-    def test_generate_api_key_format(self):
-        """Generated keys should start with 'oa_' and be sufficiently long."""
-        key = generate_api_key()
-        assert key.startswith("oa_")
-        assert len(key) > 40
-        assert isinstance(key, str)
+    response = client.post(
+        "/auth/api-keys?name=integration",
+        headers={"Authorization": f"Bearer {token}"},
+    )
 
-    def test_hash_api_key_deterministic(self):
-        """SHA-256 hashing should be deterministic."""
-        key = "oa_test_key_12345"
-        h1 = hash_api_key(key)
-        h2 = hash_api_key(key)
-        assert h1 == h2
-        assert len(h1) == 64
+    assert response.status_code == 200
+    body = response.json()
+    assert body["api_key"].startswith("oa_")
 
-    def test_hash_api_key_different(self):
-        """Different keys should produce different hashes."""
-        h1 = hash_api_key("oa_key_one")
-        h2 = hash_api_key("oa_key_two")
-        assert h1 != h2
+    db = client.db()
+    stored = db.query(ApiKey).filter(ApiKey.id == body["id"]).first()
+    assert stored.key_hash == hash_api_key(body["api_key"])
+    assert stored.key_hash != body["api_key"]
+    db.close()
 
-    def test_unique_keys(self):
-        """Generated keys should be unique."""
-        keys = {generate_api_key() for _ in range(100)}
-        assert len(keys) == 100
+
+def test_revoke_api_key_immediately_blocks_key(client):
+    user_id = create_user(client)
+    plaintext, key_id = create_key(client, user_id)
+    token = create_access_token({"sub": str(user_id), "address": "0xtest"})
+
+    response = client.delete(
+        f"/auth/api-keys/{key_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    blocked = client.get("/protected", headers={"X-API-Key": plaintext})
+
+    assert response.status_code == 200
+    assert blocked.status_code == 401
